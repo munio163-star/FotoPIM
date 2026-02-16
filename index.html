@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FotoPIM Web - Przetwarzanie Obrazów</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+
+<body>
+    <div id="app" class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-left">
+                <h1 class="app-title">FotoPIM</h1>
+                <span class="app-subtitle">Przetwarzanie Obrazów</span>
+            </div>
+            <div class="header-right">
+                <button id="themeToggle" class="icon-btn" title="Zmień motyw">
+                    <svg class="icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    <svg class="icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Panel - Settings -->
+            <aside class="left-panel" id="leftPanel">
+                <div class="panel-section">
+                    <h3 class="section-title">Parametry przetwarzania</h3>
+
+                    <div class="param-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="useMargin" checked class="checkbox">
+                            <label for="useMargin">Margines</label>
+                        </div>
+                        <div class="param-input">
+                            <input type="number" id="margin" class="form-input form-input-sm" value="0" min="0"
+                                max="100">
+                            <span class="param-unit">px</span>
+                        </div>
+                    </div>
+
+                    <div class="param-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="useMaxSide" checked class="checkbox">
+                            <label for="useMaxSide">Maksymalny bok</label>
+                        </div>
+                        <div class="param-input">
+                            <input type="number" id="maxSide" class="form-input form-input-sm" value="3000" min="100"
+                                max="10000">
+                            <span class="param-unit">px</span>
+                        </div>
+                    </div>
+
+                    <div class="param-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="useMinSize" checked class="checkbox">
+                            <label for="useMinSize">Minimalny rozmiar</label>
+                        </div>
+                        <div class="param-input">
+                            <input type="number" id="minSize" class="form-input form-input-sm" value="500" min="100"
+                                max="5000">
+                            <span class="param-unit">px</span>
+                        </div>
+                    </div>
+
+                    <div class="param-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="useMaxMb" checked class="checkbox">
+                            <label for="useMaxMb">Max rozmiar pliku</label>
+                        </div>
+                        <div class="param-input">
+                            <input type="number" id="maxMb" class="form-input form-input-sm" value="2.99" min="0.1"
+                                max="100" step="0.01">
+                            <span class="param-unit">MB</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <h3 class="section-title">Nazywanie plików</h3>
+                    <div class="form-group">
+                        <label class="form-label">Nazwa bazowa</label>
+                        <input type="text" id="baseName" class="form-input" placeholder="np. produkt">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Numer startowy</label>
+                        <input type="text" id="startNumber" class="form-input" value="1" placeholder="np. 1 lub 001">
+                    </div>
+                </div>
+
+                <div class="panel-section panel-actions">
+                    <button id="btnStartProcessing" class="btn btn-success btn-full" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        Przetwórz do ZIP
+                    </button>
+                    <button id="btnProcessSingle" class="btn btn-primary btn-full" disabled>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Przetwórz pojedyncze zdjęcia
+                    </button>
+                    <button id="btnDownloadZip" class="btn btn-secondary btn-full" style="display: none;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Pobierz jako ZIP
+                    </button>
+                </div>
+            </aside>
+
+            <!-- Center Panel - File List -->
+            <section class="center-panel" id="centerPanel">
+                <input type="file" id="fileInput" multiple accept="image/*" style="display: none;">
+
+                <div class="files-toolbar">
+                    <div class="toolbar-info">
+                        <span id="fileCount">0 plików</span>
+                    </div>
+                    <div class="toolbar-actions">
+                        <button id="btnDeleteSelected" class="btn btn-sm btn-danger" style="display: none;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path
+                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+                                </path>
+                            </svg>
+                            Usuń zaznaczone
+                        </button>
+                        <button id="btnClearList" class="btn btn-sm btn-secondary">Wyczyść</button>
+                    </div>
+                </div>
+
+                <div class="files-table-container">
+                    <div class="files-table-header">
+                        <div class="header-cell header-preview">Podgląd</div>
+                        <div class="header-cell header-trimmed"></div>
+                        <div class="header-cell header-size">Rozmiar</div>
+                        <div class="header-cell header-newname">Nazwa nowa</div>
+                        <div class="header-cell header-checkbox"></div>
+                    </div>
+                    <div class="files-table" id="filesGrid">
+                        <!-- File rows will be inserted here -->
+                    </div>
+                </div>
+
+                <div class="empty-state" id="emptyState">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                        <polyline points="21 15 16 10 5 21"></polyline>
+                    </svg>
+                    <p>Brak zdjęć</p>
+                    <p class="empty-hint">Kliknij przycisk "Załaduj zdjęcia" lub przeciągnij pliki</p>
+                </div>
+            </section>
+
+            <!-- Resizer -->
+            <div class="panel-resizer" id="panelResizer"></div>
+
+            <!-- Right Panel - Preview -->
+            <aside class="right-panel" id="rightPanel">
+                <div class="preview-threshold" id="previewThreshold" style="display: none;">
+                    <input type="range" id="thresholdSlider" min="0" max="255" value="10" class="slider-full">
+                </div>
+
+                <div class="preview-content" id="previewContent">
+                    <div class="preview-placeholder" id="previewPlaceholder">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                        <p>Wybierz zdjęcie</p>
+                    </div>
+
+                    <div class="preview-image-container" id="previewImageContainer" style="display: none;">
+                        <canvas id="previewCanvas"></canvas>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <!-- Progress Overlay -->
+        <div class="progress-overlay" id="progressOverlay" style="display: none;">
+            <div class="progress-modal">
+                <div class="progress-header">
+                    <h3>Przetwarzanie...</h3>
+                    <span id="progressText">0%</span>
+                </div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+                <p class="progress-status" id="progressStatus">Przygotowywanie...</p>
+                <button id="btnCancelProcessing" class="btn btn-secondary">Anuluj</button>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toastContainer"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
