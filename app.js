@@ -436,16 +436,28 @@ function removeFile(id) {
 }
 
 function removeSelectedFiles() {
-    if (state.selectedFileIds.length === 0) return;
+    // Zbierz wszystkie ID do usunięcia
+    const idsToDelete = new Set(state.selectedFileIds);
 
-    const count = state.selectedFileIds.length;
+    // Dodaj pliki z zaznaczonym checkboxem Lifestyle
+    state.files.forEach(f => {
+        if (f.lifestyle) {
+            idsToDelete.add(f.id);
+        }
+    });
 
-    state.selectedFileIds.forEach(id => {
+    if (idsToDelete.size === 0) return;
+
+    const count = idsToDelete.size;
+
+    // Usuń wiersze z DOM
+    idsToDelete.forEach(id => {
         const row = document.querySelector(`.file-row[data-id="${id}"]`);
         if (row) row.remove();
     });
 
-    state.files = state.files.filter(f => !state.selectedFileIds.includes(f.id));
+    // Usuń z tablicy files
+    state.files = state.files.filter(f => !idsToDelete.has(f.id));
     state.selectedFileIds = [];
     state.lastSelectedIndex = -1;
 
@@ -1305,10 +1317,14 @@ async function processImage(fileObj, settings) {
                     }
                 }
 
-                // 4. Convert to JPEG with quality - BEZ białego tła na końcu!
+                // 4. Convert to JPEG with quality
                 canvas.width = finalWidth;
                 canvas.height = finalHeight;
-                // Nie wypełniaj białym tłem - rysuj od razu obraz!
+
+                // KLUCZOWE: JPEG nie obsługuje transparency - wypełnij białym tłem
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, finalWidth, finalHeight);
+                // Potem narysuj obraz na białym tle
                 ctx.drawImage(workingCanvas, 0, 0);
 
                 // Get blob
