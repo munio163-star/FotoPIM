@@ -131,29 +131,33 @@ const workerPool = {
                 }
             };
 
-            // Read file as ArrayBuffer
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                // Get original dimensions
-                const img = new Image();
-                img.onload = () => {
-                    this.assignTask({
-                        type: 'GENERATE_THUMBNAIL',
-                        data: {
-                            id: fileObj.id,
-                            fileBuffer: e.target.result,
-                            fileName: fileObj.name,
-                            fileType: fileObj.file.type,
-                            threshold: fileObj.threshold,
-                            margin: state.settings.useMargin ? state.settings.margin : 0,
-                            originalWidth: img.width,
-                            originalHeight: img.height
-                        }
-                    });
-                };
-                img.src = URL.createObjectURL(fileObj.file);
+            // Get dimensions fast using ObjectURL
+            const img = new Image();
+            const url = URL.createObjectURL(fileObj.file);
+            img.onload = () => {
+                const originalWidth = img.width;
+                const originalHeight = img.height;
+                URL.revokeObjectURL(url);
+
+                this.assignTask({
+                    type: 'GENERATE_THUMBNAIL',
+                    data: {
+                        id: fileObj.id,
+                        file: fileObj.file, // Send File/Blob directly
+                        fileName: fileObj.name,
+                        fileType: fileObj.file.type,
+                        threshold: fileObj.threshold,
+                        margin: state.settings.useMargin ? state.settings.margin : 0,
+                        originalWidth,
+                        originalHeight
+                    }
+                });
             };
-            reader.readAsArrayBuffer(fileObj.file);
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                this.onThumbnailError?.({ id: fileObj.id, error: 'Błąd ładowania obrazu' });
+            };
+            img.src = url;
         });
     }
 };
@@ -407,6 +411,7 @@ function addFiles(newFiles) {
         showToast(`Dodano ${addedCount} plików`, 'success');
         updateUIState();
         updateFileNames();
+        startBackgroundPreloading(); // Start preloading previews in the background
     }
 }
 
@@ -693,20 +698,26 @@ async function generateThumbnailMainThread(fileObj) {
 
     let img, originalWidth, originalHeight, scaleForPreview = 1;
 
-    const fileData = await fileObj.file.arrayBuffer();
-    const blob = new Blob([fileData], { type: fileObj.file.type });
+    const blob = fileObj.file;
 
     try {
         if (!fileObj.resolution) {
-            const metaImg = await new Promise((resolve) => {
+            const metaImg = await new Promise((resolve, reject) => {
                 const i = new Image();
-                i.onload = () => resolve(i);
-                i.src = URL.createObjectURL(blob);
+                const url = URL.createObjectURL(blob);
+                i.onload = () => {
+                    URL.revokeObjectURL(url);
+                    resolve(i);
+                };
+                i.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error('Błąd ładowania obrazu'));
+                };
+                i.src = url;
             });
             originalWidth = metaImg.width;
             originalHeight = metaImg.height;
             fileObj.resolution = `${originalWidth}x${originalHeight}`;
-            URL.revokeObjectURL(metaImg.src);
         } else {
             const parts = fileObj.resolution.split('x');
             originalWidth = parseInt(parts[0]);
@@ -1036,8 +1047,7 @@ async function loadPreviewImage(fileObj) {
     }
 
     // Cache miss - ładuj i zapisz do cache
-    const fileBuffer = await fileObj.file.arrayBuffer();
-    const blob = new Blob([fileBuffer], { type: fileObj.file.type });
+    const blob = fileObj.file; // Use the File object directly (it's a Blob), MUCH FASTER than arrayBuffer()
 
     // Pobierz wymiary oryginału
     let originalWidth, originalHeight;
@@ -1112,6 +1122,39 @@ function selectAllLifestyle() {
     });
     updateFileNames();
     renderFiles();
+}
+
+// ===================================
+// Background Preloading System
+// ===================================
+
+async function startBackgroundPreloading() {
+    if (state.isPreloading) return;
+    state.isPreloading = true;
+
+    // Przetwarzaj pliki po kolei, aby nie blokować interfejsu
+    for (const fileObj of state.files) {
+        // Jeśli plik już ma podgląd lub jest w trakcie ładowania (np. kliknięty przez użytkownika)
+        if (fileObj.previewImage || fileObj.isPreloading) continue;
+
+        try {
+            fileObj.isPreloading = true;
+            // loadPreviewImage sam sprawdzi cache i rozmiary
+            await loadPreviewImage(fileObj);
+            
+            // Daj przeglądarce chwilę na inne zadania/interakcje
+            await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (e) {
+            console.warn('Background preload failed:', e);
+        } finally {
+            fileObj.isPreloading = false;
+        }
+
+        // Przerwij, jeśli lista plików została wyczyszczona
+        if (state.files.length === 0) break;
+    }
+
+    state.isPreloading = false;
 }
 
 // ===================================

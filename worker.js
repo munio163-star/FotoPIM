@@ -99,6 +99,7 @@ self.onmessage = async function(e) {
 async function handleGenerateThumbnail(fileData) {
     const {
         id,
+        file,
         fileBuffer,
         fileName,
         fileType,
@@ -110,7 +111,7 @@ async function handleGenerateThumbnail(fileData) {
 
     try {
         // KLUCZOWA: Downsample przy dekodowaniu
-        const blob = new Blob([fileBuffer], { type: fileType });
+        const blob = file || new Blob([fileBuffer], { type: fileType });
         const PREVIEW_MAX_SIZE = 600;
         const maxDim = Math.max(originalWidth, originalHeight);
         const scaleForPreview = maxDim > PREVIEW_MAX_SIZE ? PREVIEW_MAX_SIZE / maxDim : 1;
@@ -198,10 +199,10 @@ async function handleGenerateThumbnail(fileData) {
 }
 
 async function handleProcessFile(fileData) {
-    const { id, fileBuffer, fileType, params } = fileData;
+    const { id, file, fileBuffer, fileType, params } = fileData;
 
     try {
-        const blob = new Blob([fileBuffer], { type: fileType });
+        const blob = file || new Blob([fileBuffer], { type: fileType });
         const img = await createImageBitmap(blob);
 
         // Processing logic here...
