@@ -13,6 +13,7 @@ window.JSZip = window.JSZip || {};
 
 const VALID_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif', '.tiff', '.tif'];
 const DEFAULT_THRESHOLD = 20;
+const NUMBER_OF_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 8); // Max 8 workers
 const DEFAULT_SETTINGS = {
     margin: 0,
     maxSide: 3000,
@@ -39,6 +40,122 @@ const state = {
     processedFiles: [],           // For ZIP download
     settings: { ...DEFAULT_SETTINGS, theme: 'light' },
     previewRequestId: 0           // For cancelling pending preview updates
+};
+
+// ===================================
+// Web Worker Pool (jak ThreadPoolExecutor w Pythonie)
+// ===================================
+const workerPool = {
+    workers: [],
+    availableWorkers: [],
+    taskQueue: [],
+    initialized: false,
+
+    init() {
+        if (this.initialized) return;
+
+        // Try to initialize workers
+        try {
+            for (let i = 0; i < NUMBER_OF_WORKERS; i++) {
+                const worker = new Worker('worker.js');
+                worker.onerror = (e) => {
+                    console.warn('Worker error, falling back to main thread:', e);
+                    this.workersDisabled = true;
+                };
+                worker.onmessage = (e) => this.handleWorkerMessage(i, e.data);
+                this.workers.push(worker);
+                this.availableWorkers.push(i);
+            }
+            this.initialized = true;
+            console.log(`Worker pool initialized with ${NUMBER_OF_WORKERS} workers`);
+        } catch (e) {
+            console.warn('Cannot initialize workers (likely file:// protocol), using main thread:', e);
+            this.workersDisabled = true;
+            this.initialized = true;
+        }
+    },
+
+    handleWorkerMessage(workerIndex, message) {
+        const { type, data } = message;
+
+        switch (type) {
+            case 'THUMBNAIL_READY':
+                this.onThumbnailReady?.(data);
+                break;
+            case 'THUMBNAIL_ERROR':
+                console.error('Worker error:', data.error);
+                this.onThumbnailError?.(data);
+                break;
+        }
+
+        // Worker is now available
+        this.availableWorkers.push(workerIndex);
+
+        // Process next task in queue
+        if (this.taskQueue.length > 0) {
+            const nextTask = this.taskQueue.shift();
+            this.assignTask(nextTask);
+        }
+    },
+
+    assignTask(task) {
+        const workerIndex = this.availableWorkers.shift();
+        if (workerIndex === undefined) {
+            // No workers available, queue the task
+            this.taskQueue.push(task);
+            return;
+        }
+
+        this.workers[workerIndex].postMessage(task);
+    },
+
+    generateThumbnail(fileObj) {
+        return new Promise((resolve, reject) => {
+            this.init();
+
+            const taskId = fileObj.id;
+            this.pendingTasks = this.pendingTasks || {};
+            this.pendingTasks[taskId] = { resolve, reject };
+
+            this.onThumbnailReady = (data) => {
+                if (this.pendingTasks[data.id]) {
+                    this.pendingTasks[data.id].resolve(data);
+                    delete this.pendingTasks[data.id];
+                }
+            };
+
+            this.onThumbnailError = (data) => {
+                if (this.pendingTasks[data.id]) {
+                    this.pendingTasks[data.id].reject(new Error(data.error));
+                    delete this.pendingTasks[data.id];
+                }
+            };
+
+            // Read file as ArrayBuffer
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                // Get original dimensions
+                const img = new Image();
+                img.onload = () => {
+                    this.assignTask({
+                        type: 'GENERATE_THUMBNAIL',
+                        data: {
+                            id: fileObj.id,
+                            fileBuffer: e.target.result,
+                            fileName: fileObj.name,
+                            fileType: fileObj.file.type,
+                            threshold: fileObj.threshold,
+                            margin: state.settings.useMargin ? state.settings.margin : 0,
+                            originalWidth: img.width,
+                            originalHeight: img.height
+                        }
+                    });
+                };
+                img.src = URL.createObjectURL(fileObj.file);
+            };
+            reader.readAsArrayBuffer(fileObj.file);
+        });
+    }
 };
 
 // ===================================
@@ -514,64 +631,157 @@ async function generateThumbnail(fileObj) {
         return fileObj.thumbnail;
     }
 
-    const img = fileObj.loadedImage || await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const i = new Image();
-            i.onload = () => resolve(i);
-            i.src = e.target.result;
-        };
-        reader.readAsDataURL(fileObj.file);
-    });
+    // If workers are disabled (file:// protocol), use main thread directly
+    if (workerPool.workersDisabled) {
+        return await generateThumbnailMainThread(fileObj);
+    }
 
-    fileObj.loadedImage = img;
-    fileObj.resolution = `${img.width}x${img.height}`;
+    try {
+        // Użyj Worker Pool do przetwarzania w tle (jak ThreadPoolExecutor w Pythonie)
+        const result = await workerPool.generateThumbnail(fileObj);
 
-    if (!fileObj.cachedImageData) {
+        // Convert ArrayBuffer back to DataURL
+        const blob = new Blob([result.thumbnailBuffer], { type: 'image/jpeg' });
+        const dataUrl = await blobToDataURL(blob);
+
+        fileObj.thumbnail = dataUrl;
+        fileObj.trimmedResolution = result.trimmedResolution;
+        fileObj.bbox = result.bbox;
+        fileObj.lastThumbThreshold = fileObj.threshold;
+
+        // Update resolution in table
+        const row = document.querySelector(`.file-row[data-id="${fileObj.id}"]`);
+        if (row) {
+            const resEl = row.querySelector('.preview-resolution');
+            if (resEl) resEl.textContent = fileObj.resolution;
+            const trimmedEl = row.querySelector('.cell-trimmed');
+            if (trimmedEl) trimmedEl.textContent = fileObj.trimmedResolution;
+        }
+
+        return fileObj.thumbnail;
+
+    } catch (e) {
+        console.warn('Worker failed, fallback to main thread:', e);
+        // Fallback do głównej funkcji
+        return await generateThumbnailMainThread(fileObj);
+    }
+}
+
+// Fallback funkcja na głównym wątku
+async function generateThumbnailMainThread(fileObj) {
+    if (fileObj.thumbnail && fileObj.lastThumbThreshold === fileObj.threshold) {
+        return fileObj.thumbnail;
+    }
+
+    const PREVIEW_MAX_SIZE = 600;
+
+    let img, originalWidth, originalHeight, scaleForPreview = 1;
+
+    const fileData = await fileObj.file.arrayBuffer();
+    const blob = new Blob([fileData], { type: fileObj.file.type });
+
+    try {
+        if (!fileObj.resolution) {
+            const metaImg = await new Promise((resolve) => {
+                const i = new Image();
+                i.onload = () => resolve(i);
+                i.src = URL.createObjectURL(blob);
+            });
+            originalWidth = metaImg.width;
+            originalHeight = metaImg.height;
+            fileObj.resolution = `${originalWidth}x${originalHeight}`;
+            URL.revokeObjectURL(metaImg.src);
+        } else {
+            const parts = fileObj.resolution.split('x');
+            originalWidth = parseInt(parts[0]);
+            originalHeight = parseInt(parts[1]);
+        }
+
+        const maxDim = Math.max(originalWidth, originalHeight);
+        if (maxDim > PREVIEW_MAX_SIZE) {
+            scaleForPreview = PREVIEW_MAX_SIZE / maxDim;
+        }
+
+        const targetWidth = Math.floor(originalWidth * scaleForPreview);
+        const targetHeight = Math.floor(originalHeight * scaleForPreview);
+
+        if (targetWidth < originalWidth) {
+            img = await createImageBitmap(blob, {
+                resizeWidth: targetWidth,
+                resizeHeight: targetHeight,
+                resizeQuality: 'high'
+            });
+        } else {
+            img = await createImageBitmap(blob);
+        }
+
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = img.width;
         tempCanvas.height = img.height;
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.drawImage(img, 0, 0);
-        fileObj.cachedImageData = tempCtx.getImageData(0, 0, img.width, img.height);
+        img.close();
+
+        const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+
+        const margin = state.settings.useMargin ? state.settings.margin : 0;
+        const bbox = trimWhitespace(imageData, fileObj.threshold, margin);
+
+        const scaledBbox = {
+            left: Math.floor(bbox.left / scaleForPreview),
+            top: Math.floor(bbox.top / scaleForPreview),
+            right: Math.ceil(bbox.right / scaleForPreview),
+            bottom: Math.ceil(bbox.bottom / scaleForPreview)
+        };
+
+        const trimmedWidth = scaledBbox.right - scaledBbox.left + 1;
+        const trimmedHeight = scaledBbox.bottom - scaledBbox.top + 1;
+        fileObj.trimmedResolution = `${trimmedWidth}x${trimmedHeight}`;
+        fileObj.bbox = scaledBbox;
+
+        const canvas = document.createElement('canvas');
+        const size = 150;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+
+        const thumbScale = Math.min(size / (bbox.right - bbox.left + 1), size / (bbox.bottom - bbox.top + 1));
+        const w = (bbox.right - bbox.left + 1) * thumbScale;
+        const h = (bbox.bottom - bbox.top + 1) * thumbScale;
+        const x = (size - w) / 2;
+        const y = (size - h) / 2;
+
+        ctx.fillStyle = '#e5e7eb';
+        ctx.fillRect(0, 0, size, size);
+        ctx.drawImage(tempCanvas, bbox.left, bbox.top, bbox.right - bbox.left + 1, bbox.bottom - bbox.top + 1, x, y, w, h);
+
+        fileObj.thumbnail = canvas.toDataURL('image/jpeg', 0.7);
+        fileObj.lastThumbThreshold = fileObj.threshold;
+
+        const row = document.querySelector(`.file-row[data-id="${fileObj.id}"]`);
+        if (row) {
+            const resEl = row.querySelector('.preview-resolution');
+            if (resEl) resEl.textContent = fileObj.resolution;
+            const trimmedEl = row.querySelector('.cell-trimmed');
+            if (trimmedEl) trimmedEl.textContent = fileObj.trimmedResolution;
+        }
+
+        return fileObj.thumbnail;
+
+    } catch (e) {
+        console.error('generateThumbnailMainThread failed:', e);
+        return null;
     }
+}
 
-    const margin = state.settings.useMargin ? state.settings.margin : 0;
-    const bbox = trimWhitespace(fileObj.cachedImageData, fileObj.threshold, margin);
-    const trimmedWidth = bbox.right - bbox.left + 1;
-    const trimmedHeight = bbox.bottom - bbox.top + 1;
-    fileObj.trimmedResolution = `${trimmedWidth}x${trimmedHeight}`;
-    fileObj.bbox = bbox;
-
-    const canvas = document.createElement('canvas');
-    const size = 150;
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-
-    const scale = Math.min(size / trimmedWidth, size / trimmedHeight);
-    const w = trimmedWidth * scale;
-    const h = trimmedHeight * scale;
-    const x = (size - w) / 2;
-    const y = (size - h) / 2;
-
-    ctx.fillStyle = '#e5e7eb';
-    ctx.fillRect(0, 0, size, size);
-    ctx.drawImage(img, bbox.left, bbox.top, trimmedWidth, trimmedHeight, x, y, w, h);
-
-    fileObj.thumbnail = canvas.toDataURL('image/jpeg', 0.7);
-    fileObj.lastThumbThreshold = fileObj.threshold;
-
-    // Update resolution in table
-    const row = document.querySelector(`.file-row[data-id="${fileObj.id}"]`);
-    if (row) {
-        const resEl = row.querySelector('.preview-resolution');
-        if (resEl) resEl.textContent = fileObj.resolution;
-        const trimmedEl = row.querySelector('.cell-trimmed');
-        if (trimmedEl) trimmedEl.textContent = fileObj.trimmedResolution;
-    }
-
-    return fileObj.thumbnail;
+// Helper: Convert Blob to DataURL
+function blobToDataURL(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
 }
 
 // ===================================
@@ -1499,28 +1709,16 @@ function initEventListeners() {
 function initPanelResizer() {
     const resizer = document.getElementById('panelResizer');
     const rightPanel = document.getElementById('rightPanel');
+    const centerPanel = document.getElementById('centerPanel');
 
-    if (!resizer || !rightPanel) return;
-
-    // Restore saved panel width
-    const savedWidth = localStorage.getItem('fotopim-preview-width');
-    if (savedWidth) {
-        const width = parseInt(savedWidth);
-        if (width >= 250 && width <= 1200) {
-            rightPanel.style.width = width + 'px';
-            rightPanel.style.minWidth = width + 'px';
-            rightPanel.style.maxWidth = width + 'px';
-        }
-    }
+    if (!resizer || !rightPanel || !centerPanel) return;
 
     let isResizing = false;
     let startX = 0;
-    let startRight = 0;
 
     resizer.addEventListener('mousedown', (e) => {
         isResizing = true;
         startX = e.clientX;
-        startRight = rightPanel.offsetWidth;
         resizer.classList.add('active');
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
@@ -1529,12 +1727,14 @@ function initPanelResizer() {
     document.addEventListener('mousemove', (e) => {
         if (!isResizing) return;
 
+        const totalWidth = centerPanel.offsetWidth + rightPanel.offsetWidth;
         const diff = startX - e.clientX;
-        const newWidth = Math.max(250, Math.min(1200, startRight + diff));
+        const newWidthPx = rightPanel.offsetWidth + diff;
+        const newPct = Math.max(20, Math.min(50, (newWidthPx / totalWidth) * 100));
 
-        rightPanel.style.width = newWidth + 'px';
-        rightPanel.style.minWidth = newWidth + 'px';
-        rightPanel.style.maxWidth = newWidth + 'px';
+        // Update flex ratios
+        centerPanel.style.flex = (100 - newPct) + '';
+        rightPanel.style.flex = newPct + '';
     });
 
     document.addEventListener('mouseup', () => {
@@ -1543,8 +1743,6 @@ function initPanelResizer() {
             resizer.classList.remove('active');
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
-            // Save panel width
-            localStorage.setItem('fotopim-preview-width', rightPanel.offsetWidth);
         }
     });
 }
