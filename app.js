@@ -1227,8 +1227,13 @@ function trimWhitespace(imageData, threshold, margin) {
 async function processImage(fileObj, settings) {
     return new Promise((resolve, reject) => {
         const img = new Image();
+        const imgUrl = URL.createObjectURL(fileObj.file);
+
         img.onload = () => {
             try {
+                // Cleanup URL
+                URL.revokeObjectURL(imgUrl);
+
                 // Create canvas
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
@@ -1300,11 +1305,10 @@ async function processImage(fileObj, settings) {
                     }
                 }
 
-                // 4. Convert to JPEG with quality
+                // 4. Convert to JPEG with quality - BEZ białego tła na końcu!
                 canvas.width = finalWidth;
                 canvas.height = finalHeight;
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, finalWidth, finalHeight);
+                // Nie wypełniaj białym tłem - rysuj od razu obraz!
                 ctx.drawImage(workingCanvas, 0, 0);
 
                 // Get blob
@@ -1322,11 +1326,19 @@ async function processImage(fileObj, settings) {
                 }, 'image/jpeg', settings.quality / 100);
 
             } catch (e) {
+                URL.revokeObjectURL(imgUrl);
                 reject(e);
             }
         };
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = URL.createObjectURL(fileObj.file);
+
+        img.onerror = () => {
+            URL.revokeObjectURL(imgUrl);
+            reject(new Error('Failed to load image'));
+        };
+
+        // KLUCZOWE: Dodaj crossOrigin dla bezpieczeństwa (dla lokalnych plików nie jest konieczne ale nie szkodzi)
+        img.crossOrigin = 'anonymous';
+        img.src = imgUrl;
     });
 }
 
@@ -1404,9 +1416,10 @@ async function processAllImages(mode = 'zip') {
         showToast(`Przetworzono ${processed - errors} z ${processed} plików`, 'warning');
     }
 
-    // Show ZIP button for zip mode
+    // KLUCZOWE: Automatyczne pobieranie ZIP dla trybu zip
     if (state.processedFiles.length > 0 && mode === 'zip') {
-        elements.btnDownloadZip.style.display = 'inline-flex';
+        // Automatycznie pobierz ZIP zamiast pokazywać przycisk
+        await downloadAsZip();
     }
 }
 
