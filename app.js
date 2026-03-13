@@ -1345,37 +1345,59 @@ async function processImage(fileObj, settings) {
                     posX, posY, targetWidth, targetHeight
                 );
 
-                // 5. Convert to JPEG with iterative compression to meet max file size
-                const maxBytes = (settings.maxMb || 2.99) * 1024 * 1024; // Convert MB to bytes
+                // 5. Convert to JPEG with iterative compression & scaling to strictly meet max file size
+                const maxBytes = (settings.maxMb || 2.99) * 1024 * 1024;
 
-                // Helper function to try different quality levels
-                const tryCompress = (quality, attempt = 0) => {
-                    canvas.toBlob((blob) => {
+                const finalizeProcessing = (currentCanvas, quality, attempt = 0) => {
+                    currentCanvas.toBlob((blob) => {
                         if (!blob) {
                             reject(new Error('Błąd podczas tworzenia pliku JPEG'));
                             return;
                         }
 
-                        // If file size is within limit OR we've tried too many times, accept it
-                        if (blob.size <= maxBytes || attempt >= 10 || !settings.useMaxMb) {
+                        if (!settings.useMaxMb || blob.size <= maxBytes || attempt >= 12) {
+                            // Target reached or too many attempts
                             resolve({
                                 blob,
-                                width: finalWidth,
-                                height: finalHeight,
+                                width: currentCanvas.width,
+                                height: currentCanvas.height,
                                 size: blob.size
                             });
                         } else {
-                            // File too large - try lower quality
-                            const newQuality = Math.max(0.1, quality - 0.1); // Reduce by 10%
-                            console.log(`File too large (${(blob.size / 1024 / 1024).toFixed(2)}MB), trying quality ${Math.round(newQuality * 100)}%`);
-                            tryCompress(newQuality, attempt + 1);
+                            // Still too large. 
+                            // Strategy: 
+                            // 1. Try reducing quality (binary search-like or steps)
+                            // 2. If quality is already low (e.g., < 0.3), start reducing resolution
+                            
+                            if (quality > 0.3 && attempt < 6) {
+                                // Reduce quality first
+                                finalizeProcessing(currentCanvas, quality - 0.15, attempt + 1);
+                            } else {
+                                // Quality reduction not enough or already low, scale down resolution
+                                const scaleFactor = 0.85; // Reduce resolution by 15% each step
+                                const nextWidth = Math.max(100, Math.floor(currentCanvas.width * scaleFactor));
+                                const nextHeight = Math.max(100, Math.floor(currentCanvas.height * scaleFactor));
+                                
+                                const nextCanvas = document.createElement('canvas');
+                                nextCanvas.width = nextWidth;
+                                nextCanvas.height = nextHeight;
+                                const nextCtx = nextCanvas.getContext('2d');
+                                
+                                // Draw white background first
+                                nextCtx.fillStyle = '#ffffff';
+                                nextCtx.fillRect(0, 0, nextWidth, nextHeight);
+                                nextCtx.drawImage(currentCanvas, 0, 0, currentCanvas.width, currentCanvas.height, 0, 0, nextWidth, nextHeight);
+                                
+                                console.log(`File still too large (${(blob.size / 1024 / 1024).toFixed(2)}MB). Scaling down to ${nextWidth}x${nextHeight}`);
+                                finalizeProcessing(nextCanvas, 0.75, attempt + 1);
+                            }
                         }
                     }, 'image/jpeg', quality);
                 };
 
-                // Start with initial quality
+                // Start processing chain
                 const initialQuality = (settings.quality || 100) / 100;
-                tryCompress(initialQuality);
+                finalizeProcessing(canvas, initialQuality);
 
             } catch (e) {
                 URL.revokeObjectURL(imgUrl);
