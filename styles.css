@@ -240,6 +240,17 @@ body {
     font-size: 12px;
 }
 
+/* Ukryj strzałki w polach numerycznych parametrów */
+.form-input-sm::-webkit-inner-spin-button,
+.form-input-sm::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.form-input-sm[type="number"] {
+    -moz-appearance: textfield;
+}
+
 .input-with-btn {
     display: flex;
     gap: 8px;

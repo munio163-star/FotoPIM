@@ -897,109 +897,121 @@ async function showPreview(id) {
         const canvas = elements.previewCanvas;
         const ctx = canvas.getContext('2d');
 
-        // Check if we're working with a downscaled image
+        // 1. Determine base bbox (either cropped with margin or full image)
+        let finalBbox;
         const isDownscaled = originalWidth && img.width < originalWidth;
         const scale = isDownscaled ? img.width / originalWidth : 1;
 
-        // Calculate bbox with current threshold and margin
-        // If we don't have imageData yet, we need to get it
-        if (!imageData) {
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = img.width;
-            tempCanvas.height = img.height;
-            const tempCtx = tempCanvas.getContext('2d');
-            tempCtx.drawImage(img, 0, 0);
-            imageData = tempCtx.getImageData(0, 0, img.width, img.height);
-            // Cache it for subsequent threshold changes
-            fileObj.cachedImageData = imageData;
-        }
+        if (state.settings.useMargin) {
+            if (!imageData) {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = img.width;
+                tempCanvas.height = img.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.drawImage(img, 0, 0);
+                imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+                fileObj.cachedImageData = imageData;
+            }
 
-        const margin = state.settings.useMargin ? state.settings.margin : 0;
-        const bbox = trimWhitespace(imageData, fileObj.threshold, margin);
-
-        // Scale bbox back to original if we're working with downscaled image
-        let finalBbox = bbox;
-        if (scale && scale < 1) {
-            finalBbox = {
+            const margin = state.settings.margin || 0;
+            const bbox = trimWhitespace(imageData, fileObj.threshold, margin);
+            
+            // Scale bbox back to original
+            finalBbox = (scale && scale < 1) ? {
                 left: Math.floor(bbox.left / scale),
                 top: Math.floor(bbox.top / scale),
                 right: Math.ceil(bbox.right / scale),
                 bottom: Math.ceil(bbox.bottom / scale)
-            };
+            } : bbox;
+        } else {
+            finalBbox = { left: 0, top: 0, right: originalWidth - 1, bottom: originalHeight - 1 };
         }
 
+        fileObj.bbox = finalBbox;
         const trimmedWidth = finalBbox.right - finalBbox.left + 1;
         const trimmedHeight = finalBbox.bottom - finalBbox.top + 1;
-
-        // Store bbox and trimmed resolution in fileObj
-        fileObj.bbox = finalBbox;
         fileObj.trimmedResolution = `${trimmedWidth}x${trimmedHeight}`;
 
-        // Update the trimmed cell in the table without full re-render
+        // Update table
         const row = document.querySelector(`.file-row[data-id="${fileObj.id}"]`);
         if (row) {
             const trimmedCell = row.querySelector('.cell-trimmed');
-            if (trimmedCell) {
-                trimmedCell.textContent = fileObj.trimmedResolution;
+            if (trimmedCell) trimmedCell.textContent = fileObj.trimmedResolution;
+        }
+
+        // 2. Calculate final frame dimensions (mimic processImage)
+        let targetWidth = trimmedWidth;
+        let targetHeight = trimmedHeight;
+
+        if (state.settings.useMaxSide) {
+            if (targetWidth > state.settings.maxSide || targetHeight > state.settings.maxSide) {
+                const s = state.settings.maxSide / Math.max(targetWidth, targetHeight);
+                targetWidth = Math.floor(targetWidth * s);
+                targetHeight = Math.floor(targetHeight * s);
             }
         }
 
-        // Force layout update before getting dimensions
+        let finalWidth = targetWidth;
+        let finalHeight = targetHeight;
+        if (state.settings.useMinSize) {
+            finalWidth = Math.max(finalWidth, state.settings.minSize);
+            finalHeight = Math.max(finalHeight, state.settings.minSize);
+        }
+
+        // 3. Draw to preview canvas (fit to container)
         elements.previewImageContainer.offsetHeight;
-        let containerWidth = elements.previewImageContainer.clientWidth;
-        let containerHeight = elements.previewImageContainer.clientHeight;
+        let cWidth = elements.previewImageContainer.clientWidth || 280;
+        let cHeight = elements.previewImageContainer.clientHeight || 400;
 
-        // Fallback if dimensions are 0
-        if (containerWidth < 100) containerWidth = 280;
-        if (containerHeight < 100) containerHeight = 400;
-
-        // Calculate scale to fit trimmed image in container, allowing it to SCALE UP
-        const displayScale = Math.min(containerWidth / trimmedWidth, containerHeight / trimmedHeight);
-        const displayWidth = Math.floor(trimmedWidth * displayScale);
-        const displayHeight = Math.floor(trimmedHeight * displayScale);
+        const displayScale = Math.min(cWidth / finalWidth, cHeight / finalHeight);
+        const displayWidth = Math.floor(finalWidth * displayScale);
+        const displayHeight = Math.floor(finalHeight * displayScale);
 
         canvas.width = displayWidth;
         canvas.height = displayHeight;
 
-        // Draw background
+        // Draw background (gray for container, white for image frame)
         ctx.fillStyle = '#e5e7eb';
         ctx.fillRect(0, 0, displayWidth, displayHeight);
+        
+        // Calculate image position within final white frame (scaled for display)
+        const frameScale = displayScale * (targetWidth / trimmedWidth);
+        const posX = Math.floor(((finalWidth - targetWidth) / 2) * displayScale);
+        const posY = Math.floor(((finalHeight - targetHeight) / 2) * displayScale);
+        const drawW = Math.floor(targetWidth * displayScale);
+        const drawH = Math.floor(targetHeight * displayScale);
 
-        // Draw from the (possibly downscaled) image using scaled bbox
-        // If we have a downscaled image, bbox is already in that coordinate space
-        const sourceBbox = (scale && scale < 1) ? bbox : finalBbox;
-        const sourceTrimmedWidth = sourceBbox.right - sourceBbox.left + 1;
-        const sourceTrimmedHeight = sourceBbox.bottom - sourceBbox.top + 1;
+        // Fill white "final" image frame in preview
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, displayWidth, displayHeight);
 
+        // Draw object
+        const sourceBbox = (scale && scale < 1 && state.settings.useMargin) ? 
+            trimWhitespace(imageData, fileObj.threshold, state.settings.margin) : 
+            (state.settings.useMargin ? finalBbox : {left: 0, top: 0, right: img.width-1, bottom: img.height-1});
+            
         ctx.drawImage(
             img,
-            sourceBbox.left, sourceBbox.top, sourceTrimmedWidth, sourceTrimmedHeight,
-            0, 0, displayWidth, displayHeight
+            sourceBbox.left, sourceBbox.top, sourceBbox.right - sourceBbox.left + 1, sourceBbox.bottom - sourceBbox.top + 1,
+            posX, posY, drawW, drawH
         );
 
-        // Update thumbnail in list
+        // Update list thumbnail
         const listImg = row ? row.querySelector('.cell-preview img') : null;
         if (listImg) {
-            const thumbCanvas = document.createElement('canvas');
-            const thumbSize = 150;
-            thumbCanvas.width = thumbSize;
-            thumbCanvas.height = thumbSize;
-            const thumbCtx = thumbCanvas.getContext('2d');
-
-            const tScale = Math.min(thumbSize / trimmedWidth, thumbSize / trimmedHeight);
-            const tw = trimmedWidth * tScale;
-            const th = trimmedHeight * tScale;
-            const tx = (thumbSize - tw) / 2;
-            const ty = (thumbSize - th) / 2;
-
-            thumbCtx.fillStyle = '#e5e7eb';
-            thumbCtx.fillRect(0, 0, thumbSize, thumbSize);
-            thumbCtx.drawImage(img, sourceBbox.left, sourceBbox.top, sourceTrimmedWidth, sourceTrimmedHeight, tx, ty, tw, th);
-
-            const thumbData = thumbCanvas.toDataURL('image/jpeg', 0.7);
-            listImg.src = thumbData;
-            fileObj.thumbnail = thumbData;
-            fileObj.lastThumbThreshold = fileObj.threshold;
+            const tCanvas = document.createElement('canvas');
+            const tSize = 150;
+            tCanvas.width = tSize; tCanvas.height = tSize;
+            const tCtx = tCanvas.getContext('2d');
+            const tS = Math.min(tSize / finalWidth, tSize / finalHeight);
+            const tw = finalWidth * tS; const th = finalHeight * tS;
+            const tx = (tSize - tw) / 2; const ty = (tSize - th) / 2;
+            tCtx.fillStyle = '#ffffff';
+            tCtx.fillRect(tx, ty, tw, th);
+            tCtx.drawImage(canvas, 0, 0, displayWidth, displayHeight, tx, ty, tw, th);
+            const tData = tCanvas.toDataURL('image/jpeg', 0.7);
+            listImg.src = tData;
+            fileObj.thumbnail = tData;
         }
     };
 
