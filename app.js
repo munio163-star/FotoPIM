@@ -969,16 +969,14 @@ async function showPreview(id) {
         }
     };
 
-    // Use cached image if available
-    if (fileObj.loadedImage) {
-        // Get original dimensions from resolution if available
-        let origW, origH;
-        if (fileObj.resolution) {
-            const parts = fileObj.resolution.split('x');
-            origW = parseInt(parts[0]);
-            origH = parseInt(parts[1]);
-        }
-        drawPreview(fileObj.loadedImage, fileObj.cachedImageData, origW, origH);
+    // Use cached preview image if available (downscaled version for preview)
+    if (fileObj.previewImage) {
+        drawPreview(
+            fileObj.previewImage,
+            fileObj.cachedImageData,
+            fileObj.previewOriginalWidth,
+            fileObj.previewOriginalHeight
+        );
         return;
     }
 
@@ -987,6 +985,7 @@ async function showPreview(id) {
     loadPreviewImage(fileObj).then(({ img, originalWidth, originalHeight }) => {
         if (currentRequestId !== state.previewRequestId) return;
 
+        // loadedImage teraz to downscaled wersja (dla kompatybilności)
         fileObj.loadedImage = img;
         fileObj.resolution = `${originalWidth}x${originalHeight}`;
         drawPreview(img, null, originalWidth, originalHeight);
@@ -997,8 +996,23 @@ async function showPreview(id) {
 
 // Nowa funkcja do szybkiego ładowania podglądu z downsampling
 async function loadPreviewImage(fileObj) {
-    const PREVIEW_MAX_SIZE = 1200;  // Większy niż dla miniatur (600px)
+    // KLUCZOWE: Dynamiczny rozmiar na podstawie szerokości panelu podglądu!
+    const previewPanel = document.getElementById('rightPanel');
+    const containerWidth = previewPanel ? previewPanel.clientWidth : 600;
+    // Dodaj margines na padding i toolbar
+    const PREVIEW_MAX_SIZE = Math.max(containerWidth - 40, 400);
 
+    // Sprawdź czy mamy już cache z odpowiednim rozmiarem
+    if (fileObj.previewImage && fileObj.previewMaxSize >= PREVIEW_MAX_SIZE) {
+        // Cache hit - mamy już obraz w odpowiednim rozmiarze
+        return {
+            img: fileObj.previewImage,
+            originalWidth: fileObj.previewOriginalWidth,
+            originalHeight: fileObj.previewOriginalHeight
+        };
+    }
+
+    // Cache miss - ładuj i zapisz do cache
     const fileBuffer = await fileObj.file.arrayBuffer();
     const blob = new Blob([fileBuffer], { type: fileObj.file.type });
 
@@ -1032,6 +1046,12 @@ async function loadPreviewImage(fileObj) {
         resizeHeight: targetHeight,
         resizeQuality: 'high'
     });
+
+    // ZAPISZ DO CACHE - kolejne kliknięcia będą błyskawiczne!
+    fileObj.previewImage = img;
+    fileObj.previewOriginalWidth = originalWidth;
+    fileObj.previewOriginalHeight = originalHeight;
+    fileObj.previewMaxSize = PREVIEW_MAX_SIZE;
 
     return { img, originalWidth, originalHeight };
 }
