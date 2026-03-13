@@ -1171,32 +1171,34 @@ function trimWhitespace(imageData, threshold, margin) {
     const width = imageData.width;
     const height = imageData.height;
 
-    let top = 0, bottom = height - 1;
-    let left = 0, right = width - 1;
-
     // Target threshold: pixels where at least one channel is darker than (255 - threshold)
     // are considered part of the image (not background)
     const t = 255 - threshold;
+
+    let top = -1, bottom = -1, left = -1, right = -1;
 
     // Find top
     outerTop:
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const i = (y * width + x) * 4;
-            // Check Alpha if present, otherwise just RGB
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            // Check Alpha > 0 AND (RGB is NOT background white)
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 top = y;
                 break outerTop;
             }
         }
     }
 
+    // If nothing found, return full image
+    if (top === -1) return { left: 0, top: 0, right: width - 1, bottom: height - 1 };
+
     // Find bottom
     outerBottom:
-    for (let y = height - 1; y >= 0; y--) {
+    for (let y = height - 1; y >= top; y--) {
         for (let x = 0; x < width; x++) {
             const i = (y * width + x) * 4;
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 bottom = y;
                 break outerBottom;
             }
@@ -1208,7 +1210,7 @@ function trimWhitespace(imageData, threshold, margin) {
     for (let x = 0; x < width; x++) {
         for (let y = top; y <= bottom; y++) {
             const i = (y * width + x) * 4;
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 left = x;
                 break outerLeft;
             }
@@ -1217,10 +1219,10 @@ function trimWhitespace(imageData, threshold, margin) {
 
     // Find right
     outerRight:
-    for (let x = width - 1; x >= 0; x--) {
+    for (let x = width - 1; x >= left; x--) {
         for (let y = top; y <= bottom; y++) {
             const i = (y * width + x) * 4;
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 right = x;
                 break outerRight;
             }
@@ -1246,88 +1248,62 @@ async function processImage(fileObj, settings) {
                 // Cleanup URL
                 URL.revokeObjectURL(imgUrl);
 
-                // Create canvas
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
+                // 1. Use the bbox that was calculated during preview generation!
+                // fileObj.bbox is already in original image coordinates
+                let workingBbox = { left: 0, top: 0, right: img.width - 1, bottom: img.height - 1 };
 
-                // 1. Trim whitespace
-                let workingCanvas = document.createElement('canvas');
-                let workingCtx = workingCanvas.getContext('2d');
-                workingCanvas.width = img.width;
-                workingCanvas.height = img.height;
-                workingCtx.drawImage(img, 0, 0);
-
-                if (settings.useMargin) {
-                    const imageData = workingCtx.getImageData(0, 0, workingCanvas.width, workingCanvas.height);
-                    const bbox = trimWhitespace(imageData, fileObj.threshold, settings.margin);
-
-                    if (bbox.right > bbox.left && bbox.bottom > bbox.top) {
-                        workingCanvas = document.createElement('canvas');
-                        workingCtx = workingCanvas.getContext('2d');
-                        workingCanvas.width = bbox.right - bbox.left + 1;
-                        workingCanvas.height = bbox.bottom - bbox.top + 1;
-                        workingCtx.drawImage(img, bbox.left, bbox.top, workingCanvas.width, workingCanvas.height, 0, 0, workingCanvas.width, workingCanvas.height);
-                    }
+                if (settings.useMargin && fileObj.bbox) {
+                    // KLUCZOWE: Użyj bbox z podglądu (już obliczone!)
+                    workingBbox = fileObj.bbox;
                 }
 
-                let finalWidth = workingCanvas.width;
-                let finalHeight = workingCanvas.height;
+                let trimmedWidth = workingBbox.right - workingBbox.left + 1;
+                let trimmedHeight = workingBbox.bottom - workingBbox.top + 1;
 
-                // 2. Resize if needed
+                // 2. Calculate target dimensions (resizing)
+                let targetWidth = trimmedWidth;
+                let targetHeight = trimmedHeight;
+
                 if (settings.useMaxSide) {
-                    if (finalWidth > settings.maxSide || finalHeight > settings.maxSide) {
-                        const scale = settings.maxSide / Math.max(finalWidth, finalHeight);
-                        finalWidth = Math.floor(finalWidth * scale);
-                        finalHeight = Math.floor(finalHeight * scale);
-
-                        const resizedCanvas = document.createElement('canvas');
-                        resizedCanvas.width = finalWidth;
-                        resizedCanvas.height = finalHeight;
-                        const resizedCtx = resizedCanvas.getContext('2d');
-                        resizedCtx.drawImage(workingCanvas, 0, 0, finalWidth, finalHeight);
-                        workingCanvas = resizedCanvas;
-                        workingCtx = resizedCtx;
+                    if (targetWidth > settings.maxSide || targetHeight > settings.maxSide) {
+                        const scale = settings.maxSide / Math.max(targetWidth, targetHeight);
+                        targetWidth = Math.floor(targetWidth * scale);
+                        targetHeight = Math.floor(targetHeight * scale);
                     }
                 }
 
-                // 3. Pad to min size
+                // 3. Calculate final dimensions (padding to min size)
+                let finalWidth = targetWidth;
+                let finalHeight = targetHeight;
+
                 if (settings.useMinSize) {
-                    if (finalWidth < settings.minSize || finalHeight < settings.minSize) {
-                        const newWidth = Math.max(finalWidth, settings.minSize);
-                        const newHeight = Math.max(finalHeight, settings.minSize);
-
-                        const paddedCanvas = document.createElement('canvas');
-                        paddedCanvas.width = newWidth;
-                        paddedCanvas.height = newHeight;
-                        const paddedCtx = paddedCanvas.getContext('2d');
-
-                        // Fill with white
-                        paddedCtx.fillStyle = '#ffffff';
-                        paddedCtx.fillRect(0, 0, newWidth, newHeight);
-
-                        // Center the image
-                        const x = Math.floor((newWidth - finalWidth) / 2);
-                        const y = Math.floor((newHeight - finalHeight) / 2);
-                        paddedCtx.drawImage(workingCanvas, x, y);
-
-                        workingCanvas = paddedCanvas;
-                        workingCtx = paddedCtx;
-                        finalWidth = newWidth;
-                        finalHeight = newHeight;
-                    }
+                    finalWidth = Math.max(finalWidth, settings.minSize);
+                    finalHeight = Math.max(finalHeight, settings.minSize);
                 }
 
-                // 4. Convert to JPEG with quality
+                // 4. Create final canvas and draw
+                const canvas = document.createElement('canvas');
                 canvas.width = finalWidth;
                 canvas.height = finalHeight;
+                const ctx = canvas.getContext('2d');
 
-                // KLUCZOWE: JPEG nie obsługuje transparency - wypełnij białym tłem
+                // Fill with white background (ESSENTIAL for JPEG)
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, finalWidth, finalHeight);
-                // Potem narysuj obraz na białym tle
-                ctx.drawImage(workingCanvas, 0, 0);
 
-                // Get blob
+                // Draw the trimmed and resized image
+                // Calculate position for centering
+                const posX = Math.floor((finalWidth - targetWidth) / 2);
+                const posY = Math.floor((finalHeight - targetHeight) / 2);
+
+                ctx.drawImage(
+                    img,
+                    workingBbox.left, workingBbox.top, trimmedWidth, trimmedHeight,
+                    posX, posY, targetWidth, targetHeight
+                );
+
+                // 5. Convert to JPEG
+                const quality = (settings.quality || 100) / 100;
                 canvas.toBlob((blob) => {
                     if (blob) {
                         resolve({
@@ -1337,26 +1313,27 @@ async function processImage(fileObj, settings) {
                             size: blob.size
                         });
                     } else {
-                        reject(new Error('Failed to create blob'));
+                        reject(new Error('Błąd podczas tworzenia pliku JPEG'));
                     }
-                }, 'image/jpeg', settings.quality / 100);
+                }, 'image/jpeg', quality);
 
             } catch (e) {
-                URL.revokeObjectURL(imgUrl);
+                console.error('Processing error:', e);
                 reject(e);
             }
         };
 
         img.onerror = () => {
             URL.revokeObjectURL(imgUrl);
-            reject(new Error('Failed to load image'));
+            reject(new Error('Błąd ładowania obrazu'));
         };
 
-        // KLUCZOWE: Dodaj crossOrigin dla bezpieczeństwa (dla lokalnych plików nie jest konieczne ale nie szkodzi)
+        // Local blobs don't usually need crossOrigin but it's safe to set
         img.crossOrigin = 'anonymous';
         img.src = imgUrl;
     });
 }
+
 
 async function processAllImages(mode = 'zip') {
     if (state.files.length === 0) {

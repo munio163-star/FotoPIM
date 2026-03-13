@@ -9,32 +9,34 @@ function trimWhitespace(imageData, threshold, margin) {
     const width = imageData.width;
     const height = imageData.height;
 
-    let top = 0, bottom = height - 1;
-    let left = 0, right = width - 1;
-
     // Target threshold: pixels where at least one channel is darker than (255 - threshold)
     // are considered part of the image (not background)
     const t = 255 - threshold;
+
+    let top = -1, bottom = -1, left = -1, right = -1;
 
     // Find top
     outerTop:
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const i = (y * width + x) * 4;
-            // Check Alpha if present, otherwise just RGB
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            // Check Alpha > 10 AND (RGB is NOT background white)
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 top = y;
                 break outerTop;
             }
         }
     }
 
+    // If nothing found, return full image
+    if (top === -1) return { left: 0, top: 0, right: width - 1, bottom: height - 1 };
+
     // Find bottom
     outerBottom:
-    for (let y = height - 1; y >= 0; y--) {
+    for (let y = height - 1; y >= top; y--) {
         for (let x = 0; x < width; x++) {
             const i = (y * width + x) * 4;
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 bottom = y;
                 break outerBottom;
             }
@@ -46,7 +48,7 @@ function trimWhitespace(imageData, threshold, margin) {
     for (let x = 0; x < width; x++) {
         for (let y = top; y <= bottom; y++) {
             const i = (y * width + x) * 4;
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 left = x;
                 break outerLeft;
             }
@@ -55,10 +57,10 @@ function trimWhitespace(imageData, threshold, margin) {
 
     // Find right
     outerRight:
-    for (let x = width - 1; x >= 0; x--) {
+    for (let x = width - 1; x >= left; x--) {
         for (let y = top; y <= bottom; y++) {
             const i = (y * width + x) * 4;
-            if (data[i + 3] > 0 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
+            if (data[i + 3] > 10 && (data[i] < t || data[i + 1] < t || data[i + 2] < t)) {
                 right = x;
                 break outerRight;
             }
