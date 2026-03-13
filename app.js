@@ -673,7 +673,11 @@ async function generateThumbnailMainThread(fileObj) {
         return fileObj.thumbnail;
     }
 
-    const PREVIEW_MAX_SIZE = 600;
+    // KLUCZOWE: Generuj od razu podgląd (1200px) zamiast małej miniatury (600px)
+    // Dzięki temu przy pierwszym kliknięciu podgląd będzie już gotowy!
+    const previewPanel = document.getElementById('rightPanel');
+    const containerWidth = previewPanel ? previewPanel.clientWidth : 600;
+    const PREVIEW_MAX_SIZE = Math.max(containerWidth - 40, 800);
 
     let img, originalWidth, originalHeight, scaleForPreview = 1;
 
@@ -715,12 +719,19 @@ async function generateThumbnailMainThread(fileObj) {
             img = await createImageBitmap(blob);
         }
 
+        // KLUCZOWE: ZAPISZ previewImage - podgląd będzie gotowy od razu!
+        fileObj.previewImage = img;
+        fileObj.previewOriginalWidth = originalWidth;
+        fileObj.previewOriginalHeight = originalHeight;
+        fileObj.previewMaxSize = PREVIEW_MAX_SIZE;
+        fileObj.loadedImage = img; // Dla kompatybilności
+
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = img.width;
         tempCanvas.height = img.height;
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.drawImage(img, 0, 0);
-        img.close();
+        // Nie zamykaj img - jest używany jako previewImage!
 
         const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
 
